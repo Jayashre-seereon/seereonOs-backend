@@ -15,6 +15,7 @@ import re
 import threading
 from datetime import UTC, datetime
 from typing import Any
+from urllib.parse import urlparse
 
 import orjson
 import psycopg
@@ -77,9 +78,17 @@ def install_loaders() -> None:
     set_json_dumps(lambda v: orjson.dumps(v).decode())
 
 
-def _conninfo_kwargs(statement_timeout_ms: int) -> dict[str, Any]:
+def _conninfo_kwargs(statement_timeout_ms: int, url: str) -> dict[str, Any]:
+    # Neon/PgBouncer transaction-pool URLs reject statement_timeout and
+    # idle_in_transaction_session_timeout when sent in libpq's startup `options`.
+    # Keep only timezone for pooled URLs; retain all session limits for direct
+    # PostgreSQL connections where those startup settings are supported.
+    host = (urlparse(url).hostname or '').lower()
+    options = '-c timezone=UTC'
+    if '-pooler.' not in host:
+        options = f'-c statement_timeout={statement_timeout_ms} -c idle_in_transaction_session_timeout=60000 -c timezone=UTC'
     return {
-        'options': f'-c statement_timeout={statement_timeout_ms} -c idle_in_transaction_session_timeout=60000 -c timezone=UTC',
+        'options': options,
         'application_name': 'seereonos-api-py',
     }
 
@@ -103,14 +112,14 @@ class Pools:
         prepare_threshold: int | None = 5,
     ) -> None:
         install_loaders()
-        kw = _conninfo_kwargs(statement_timeout_ms)
         # psycopg prepares a statement server-side after it ran `prepare_threshold` times on a connection (the hot
         # queries: session lookup, version vector, table reads). None = never (PgBouncer in transaction mode < 1.21)
-        kw['prepare_threshold'] = prepare_threshold
+        owner_kw = {**_conninfo_kwargs(statement_timeout_ms, owner_url), 'prepare_threshold': prepare_threshold}
+        app_kw = {**_conninfo_kwargs(statement_timeout_ms, app_url), 'prepare_threshold': prepare_threshold}
         self.owner = ConnectionPool(
-            to_conninfo(owner_url), min_size=1, max_size=owner_max, kwargs={**kw, 'autocommit': True}, open=open, name='owner', timeout=30
+            to_conninfo(owner_url), min_size=1, max_size=owner_max, kwargs={**owner_kw, 'autocommit': True}, open=open, name='owner', timeout=30
         )
-        self.app = ConnectionPool(to_conninfo(app_url), min_size=1, max_size=app_max, kwargs={**kw, 'autocommit': True}, open=open, name='app', timeout=30)
+        self.app = ConnectionPool(to_conninfo(app_url), min_size=1, max_size=app_max, kwargs={**app_kw, 'autocommit': True}, open=open, name='app', timeout=30)
         self._closed = False
         self._lock = threading.Lock()
 
@@ -132,4 +141,4 @@ class Pools:
 def connect(url: str, statement_timeout_ms: int = 30000) -> psycopg.Connection:
     """a single autocommit connection (tooling: migrate / seed / reset)"""
     install_loaders()
-    return psycopg.connect(to_conninfo(url), autocommit=True, **_conninfo_kwargs(statement_timeout_ms))
+    return psycopg.connect(to_conninfo(url), autocommit=True, **_conninfo_kwargs(statement_timeout_ms, url))
