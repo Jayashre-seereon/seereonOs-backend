@@ -9,6 +9,7 @@ dist-server
 *.log
 backend/.env
 backend/var
+var
 **/__pycache__
 **/.pytest_cache
 **/.ruff_cache

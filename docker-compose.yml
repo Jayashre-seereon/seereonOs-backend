@@ -1,7 +1,7 @@
 # Local / single-host deployment: PostgreSQL 16 + the SeereonOS API (Python FastAPI; it also serves the web app).
 #   cp backend/.env.example .env      # set the passwords and MFA_ENCRYPTION_KEY (compose refuses to start without them)
 #   docker compose up --build         → http://localhost:8000   (API docs: /api/docs)
-# The image is backend/Dockerfile: a Node stage builds the frontend (http mode) and exports the demo seed; the runtime
+# The image is the repository-root Dockerfile: a Node stage builds the frontend (http mode) and exports the demo seed; the runtime
 # is Python only. Migrations run on every start (idempotent); SEED_DEMO=true loads the demo data into an empty database.
 services:
   db:
@@ -27,7 +27,7 @@ services:
   api:
     build:
       context: .
-      dockerfile: backend/Dockerfile
+      dockerfile: Dockerfile
     restart: unless-stopped
     depends_on:
       db:
