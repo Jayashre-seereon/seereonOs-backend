@@ -1,0 +1,15 @@
+node_modules
+frontend/node_modules
+dist
+dist-preview
+dist-server
+.git
+.env
+.env.local
+*.log
+backend/.env
+backend/var
+**/__pycache__
+**/.pytest_cache
+**/.ruff_cache
+.venv

@@ -1,0 +1,60 @@
+# Local / single-host deployment: PostgreSQL 16 + the SeereonOS API (Python FastAPI; it also serves the web app).
+#   cp backend/.env.example .env      # set the passwords and MFA_ENCRYPTION_KEY (compose refuses to start without them)
+#   docker compose up --build         → http://localhost:8000   (API docs: /api/docs)
+# The image is backend/Dockerfile: a Node stage builds the frontend (http mode) and exports the demo seed; the runtime
+# is Python only. Migrations run on every start (idempotent); SEED_DEMO=true loads the demo data into an empty database.
+services:
+  db:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: postgres
+      SEEREON_DB: seereonos
+      SEEREON_OWNER_PASSWORD: ${SEEREON_OWNER_PASSWORD:?set SEEREON_OWNER_PASSWORD in .env}
+      SEEREON_APP_PASSWORD: ${SEEREON_APP_PASSWORD:?set SEEREON_APP_PASSWORD in .env}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./backend/tools/bootstrap.sql:/seereon/bootstrap.sql:ro
+      - ./backend/docker/initdb.sh:/docker-entrypoint-initdb.d/10-seereon.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d seereonos"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  api:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      APP_ENV: production
+      # the business time zone ("today" for every tenant); not ${TZ}: a TZ exported in the deploying shell would win
+      TZ: ${SEEREON_TZ:-Asia/Kolkata}
+      PORT: 8000
+      WEB_CONCURRENCY: ${WEB_CONCURRENCY:-2}
+      DATABASE_URL: postgres://seereon_owner:${SEEREON_OWNER_PASSWORD:?set SEEREON_OWNER_PASSWORD in .env}@db:5432/seereonos
+      DATABASE_APP_URL: postgres://seereon_app:${SEEREON_APP_PASSWORD:?set SEEREON_APP_PASSWORD in .env}@db:5432/seereonos
+      MFA_ENCRYPTION_KEY: ${MFA_ENCRYPTION_KEY:?set MFA_ENCRYPTION_KEY in .env (openssl rand -base64 48)}
+      MFA_ENCRYPTION_KEY_PREVIOUS: ${MFA_ENCRYPTION_KEY_PREVIOUS:-}
+      SECURITY_EVENTS_RETENTION_DAYS: ${SECURITY_EVENTS_RETENTION_DAYS:-400}
+      RATE_LIMIT_AUTH: ${RATE_LIMIT_AUTH:-10}
+      RATE_LIMIT_GLOBAL: ${RATE_LIMIT_GLOBAL:-600}
+      APP_URL: ${APP_URL:-http://localhost:8000}
+      CORS_ORIGINS: ${CORS_ORIGINS:-}
+      TRUST_PROXY: ${TRUST_PROXY:-false}
+      SMTP_URL: ${SMTP_URL:-}
+      MAIL_FROM: ${MAIL_FROM:-SeereonOS <no-reply@seereonos.com>}
+      SEED_DEMO: ${SEED_DEMO:-true}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    ports:
+      - "${API_PORT:-8000}:8000"
+    stop_grace_period: 30s
+
+volumes:
+  pgdata:
